@@ -79,6 +79,17 @@ public class SingleItemSubscriberStream extends AbstractClientStream implements 
     private volatile IPlayItem item;
 
     /**
+     * threshold for number of pending video frames
+     */
+    private int maxPendingVideoFramesThreshold = 10;
+
+    /**
+     * if we have more than 1 pending video frames, but less than maxPendingVideoFrames, continue sending until there
+     * are this many sequential frames with more than 1 pending
+     */
+    private int maxSequentialPendingVideoFrames = 10;
+
+    /**
      * Plays items back
      */
     protected PlayEngine engine;
@@ -162,6 +173,8 @@ public class SingleItemSubscriberStream extends AbstractClientStream implements 
      */
     PlayEngine createEngine(ISchedulingService schedulingService, IConsumerService consumerService, IProviderService providerService) {
         engine = new PlayEngine.Builder(this, schedulingService, consumerService, providerService).build();
+        engine.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+        engine.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
         return engine;
     }
 
@@ -197,6 +210,22 @@ public class SingleItemSubscriberStream extends AbstractClientStream implements 
         this.underrunTrigger = underrunTrigger;
     }
 
+    /**
+     * @param maxPendingVideoFrames
+     *            the maxPendingVideoFrames to set
+     */
+    public void setMaxPendingVideoFrames(int maxPendingVideoFrames) {
+        this.maxPendingVideoFramesThreshold = maxPendingVideoFrames;
+    }
+
+    /**
+     * @param maxSequentialPendingVideoFrames
+     *            the maxSequentialPendingVideoFrames to set
+     */
+    public void setMaxSequentialPendingVideoFrames(int maxSequentialPendingVideoFrames) {
+        this.maxSequentialPendingVideoFrames = maxSequentialPendingVideoFrames;
+    }
+
     public void start() {
         //ensure the play engine exists
         if (engine == null) {
@@ -224,6 +253,8 @@ public class SingleItemSubscriberStream extends AbstractClientStream implements 
                     providerService = (IProviderService) scope.getParent().getContext().getBean(IProviderService.BEAN_NAME);
                 }
                 engine = new PlayEngine.Builder(this, schedulingService, consumerService, providerService).build();
+                engine.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+                engine.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
             } else {
                 log.info("Scope was null on start");
             }

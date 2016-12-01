@@ -26,12 +26,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -376,6 +371,17 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
      * Keep alive task.
      */
     private ScheduledFuture<?> keepAliveTask;
+
+    /**
+     * threshold for number of pending video frames
+     */
+    private int maxPendingVideoFramesThreshold = 10;
+
+    /**
+     * if we have more than 1 pending video frames, but less than maxPendingVideoFrames, continue sending until there
+     * are this many sequential frames with more than 1 pending
+     */
+    private int maxSequentialPendingVideoFrames = 10;
 
     /**
      * Creates anonymous RTMP connection without scope.
@@ -775,6 +781,8 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
         if (isValidStreamId(streamId)) {
             // get SingleItemSubscriberStream defined as a prototype in red5-common.xml
             SingleItemSubscriberStream siss = (SingleItemSubscriberStream) scope.getContext().getBean("singleItemSubscriberStream");
+            siss.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+            siss.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
             customizeStream(streamId, siss);
             if (!registerStream(siss)) {
                 siss = null;
@@ -789,6 +797,8 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
         if (isValidStreamId(streamId)) {
             // get PlaylistSubscriberStream defined as a prototype in red5-common.xml
             PlaylistSubscriberStream pss = (PlaylistSubscriberStream) scope.getContext().getBean("playlistSubscriberStream");
+            pss.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+            pss.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
             customizeStream(streamId, pss);
             if (!registerStream(pss)) {
                 log.trace("Stream: {} for stream id: {} failed to register", streamId);
@@ -1588,7 +1598,8 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
     public void ping() {
         long newPingTime = System.currentTimeMillis();
         if (log.isDebugEnabled()) {
-            log.debug("Send Ping: session=[{}], currentTime=[{}], lastPingTime=[{}]", new Object[] { getSessionId(), newPingTime, lastPingSentOn.get() });
+            log.debug("Send Ping: session=[{}], currentTime=[{}], lastPingTime=[{}]",
+                    new Object[] { getSessionId(), newPingTime, lastPingSentOn.get() });
         }
         if (lastPingSentOn.get() == 0) {
             lastPongReceivedOn.set(newPingTime);
@@ -1611,7 +1622,8 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
         long now = System.currentTimeMillis();
         Number previousPingValue = lastPingSentOn.get() & 0xffffffff;
         if (log.isDebugEnabled()) {
-            log.debug("Pong received: session=[{}] at {} with value {}, previous received at {}", new Object[] { getSessionId(), now, pong.getValue2(), previousPingValue });
+            log.debug("Pong received: session=[{}] at {} with value {}, previous received at {}",
+                    new Object[] { getSessionId(), now, pong.getValue2(), previousPingValue });
         }
         if (pong.getValue2() == previousPingValue) {
             lastPingRoundTripTime.set((int) ((now & 0xffffffff) - pong.getValue2().intValue()));
@@ -1621,8 +1633,11 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
         } else {
             // don't log the congestion entry unless there are more than X messages waiting
             if (getPendingMessages() > 4) {
-                Number pingRtt = (now & 0xffffffff) - pong.getValue2().intValue();
-                log.info("Pong delayed: session=[{}], ping response took [{} ms] to arrive. Connection may be congested, or loopback", new Object[] { getSessionId(), pingRtt });
+                long pingRtt = (int)(now & 0xffffffff) - pong.getValue2().intValue();
+                if (pingRtt > 10) {
+                    log.info("Pong delayed: session=[{}], ping response took [{}s] to arrive. Connection may be congested, or loopback",
+                            new Object[] { getSessionId(), TimeUnit.MILLISECONDS.toSeconds(pingRtt) });
+                }
             }
         }
         lastPongReceivedOn.set(now);
@@ -1660,6 +1675,22 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
      */
     public void setMaxInactivity(int maxInactivity) {
         this.maxInactivity = maxInactivity;
+    }
+
+    /**
+     * @param maxPendingVideoFrames
+     *            the maxPendingVideoFrames to set
+     */
+    public void setMaxPendingVideoFrames(int maxPendingVideoFrames) {
+        this.maxPendingVideoFramesThreshold = maxPendingVideoFrames;
+    }
+
+    /**
+     * @param maxSequentialPendingVideoFrames
+     *            the maxSequentialPendingVideoFrames to set
+     */
+    public void setMaxSequentialPendingVideoFrames(int maxSequentialPendingVideoFrames) {
+        this.maxSequentialPendingVideoFrames = maxSequentialPendingVideoFrames;
     }
 
     /**

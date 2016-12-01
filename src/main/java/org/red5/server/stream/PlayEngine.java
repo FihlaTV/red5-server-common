@@ -36,6 +36,7 @@ import org.red5.codec.StreamCodecInfo;
 import org.red5.io.amf.Output;
 import org.red5.io.utils.ObjectMap;
 import org.red5.logging.Red5LoggerFactory;
+import org.red5.server.api.IConnection;
 import org.red5.server.api.scheduling.IScheduledJob;
 import org.red5.server.api.scheduling.ISchedulingService;
 import org.red5.server.api.scope.IBroadcastScope;
@@ -151,7 +152,8 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
     private int maxPendingVideoFramesThreshold = 10;
 
     /**
-     * if we have more than 1 pending video frames, but less than maxPendingVideoFrames, continue sending until there are this many sequential frames with more than 1 pending
+     * if we have more than 1 pending video frames, but less than maxPendingVideoFrames, continue sending until there
+     * are this many sequential frames with more than 1 pending
      */
     private int maxSequentialPendingVideoFrames = 10;
 
@@ -178,7 +180,9 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
     private AtomicLong bytesSent = new AtomicLong(0);
 
     /**
-     * Start time of stream playback. It's not a time when the stream is being played but the time when the stream should be played if it's played from the very beginning. Eg. A stream is played at timestamp 5s on 1:00:05. The playbackStart is 1:00:00.
+     * Start time of stream playback. It's not a time when the stream is being played but the time when the stream
+     * should be played if it's played from the very beginning. Eg. A stream is played at timestamp 5s on 1:00:05.
+     * The playbackStart is 1:00:00.
      */
     private volatile long playbackStart;
 
@@ -226,6 +230,10 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
      * List of pending operations
      */
     private ConcurrentLinkedQueue<Runnable> pendingOperations = new ConcurrentLinkedQueue<Runnable>();
+
+    // Keep count of dropped packets so we can log every so often.
+    private long droppedPacketsCount = 0;
+    private long droppedPacketsCountLogInterval = 100;
 
     /**
      * Constructs a new PlayEngine.
@@ -1453,34 +1461,81 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
 
     /** {@inheritDoc} */
     public void pushMessage(IPipe pipe, IMessage message) throws IOException {
+        String sessionId = subscriberStream.getConnection().getSessionId();
+        if (log.isTraceEnabled()) {
+            log.trace("Push message. sessionId={} stream={}", sessionId, subscriberStream.getBroadcastStreamPublishName());
+        }
+
         if (message instanceof RTMPMessage) {
             RTMPMessage rtmpMessage = (RTMPMessage) message;
             IRTMPEvent body = rtmpMessage.getBody();
+
             if (body instanceof IStreamData) {
                 // the subscriber paused 
                 if (subscriberStream.getState() == StreamState.PAUSED) {
-                    log.debug("Dropping packet because we are paused");
+                    if (log.isInfoEnabled()) {
+                        log.info("Dropping packet because we are paused. sessionId={} stream={} count={}",
+                                sessionId, subscriberStream.getBroadcastStreamPublishName(), droppedPacketsCount);
+                    }
+
                     videoFrameDropper.dropPacket(rtmpMessage);
                     return;
                 }
-                if (body instanceof VideoData) {
-                    if (msgIn instanceof IBroadcastScope) {
-                        IBroadcastStream stream = (IBroadcastStream) ((IBroadcastScope) msgIn).getClientBroadcastStream();
+                if (body instanceof VideoData && body.getSourceType() == Constants.SOURCE_TYPE_LIVE) {
+                    // Check if we need to drop packets for a live video stream.
+                    if (log.isTraceEnabled()) {
+                        log.trace("Is VideoData. sessionId={} stream={}",
+                                sessionId, subscriberStream.getBroadcastStreamPublishName());
+                    }
+
+                    if (msgIn.get() instanceof IBroadcastScope) {
+                        if (log.isTraceEnabled()) {
+                            log.trace("Is IBroadcastScope. sessionId={} stream={}",
+                                    sessionId, subscriberStream.getBroadcastStreamPublishName());
+                        }
+
+                        IBroadcastStream stream = (IBroadcastStream) ((IBroadcastScope) msgIn.get()).getClientBroadcastStream();
+
                         if (stream != null && stream.getCodecInfo() != null) {
                             IVideoStreamCodec videoCodec = stream.getCodecInfo().getVideoCodec();
                             // dont try to drop frames if video codec is null
                             if (videoCodec != null && videoCodec.canDropFrames()) {
                                 if (!receiveVideo) {
-                                    // client disabled video or the app doesn't have enough bandwidth allowed for this stream
-                                    log.debug("Dropping packet because we cant receive video or token acquire failed");
+                                    droppedPacketsCount++;
                                     videoFrameDropper.dropPacket(rtmpMessage);
+                                    if (log.isInfoEnabled() && droppedPacketsCount % droppedPacketsCountLogInterval == 0) {
+                                        // client disabled video or the app doesn't have enough bandwidth allowed for this stream
+                                        log.info("Drop packet. Failed to acquire token or no video. sessionId={} stream={} count={}",
+                                                sessionId, subscriberStream.getBroadcastStreamPublishName(), droppedPacketsCount);
+                                    }
+
                                     return;
                                 }
-                                // only check for frame dropping if the codec supports it
-                                long pendingVideos = pendingVideoMessages();
+
+                                // Implement some sort of back-pressure on video streams. When the client is on a congested
+                                // connection, Red5 cannot send packets fast enough. Mina puts these packets into an
+                                // unbounded queue. If we generate video packets fast enough, the queue would get large
+                                // which may trigger an OutOfMemory exception. To mitigate this, we check the size of
+                                // pending messages in the queue and drop video packets until the queue is below the
+                                // threshold.
+
+                                // Get the number of pending messages that are queued up to be sent to the client.
+                                long pendingVideos = pendingMessages();
+
+                                if (log.isTraceEnabled()) {
+                                    log.trace("Pending messages. sessionId={} pending={} threshold={} sequential={} stream={}, count={}",
+                                            new Object[] { sessionId, pendingVideos, maxPendingVideoFramesThreshold,
+                                                    numSequentialPendingVideoFrames, subscriberStream.getBroadcastStreamPublishName(),
+                                            droppedPacketsCount});
+                                }
+
                                 if (!videoFrameDropper.canSendPacket(rtmpMessage, pendingVideos)) {
                                     // drop frame as it depends on other frames that were dropped before
-                                    log.debug("Dropping packet because frame dropper says we cant send it");
+                                    droppedPacketsCount++;
+                                    if (log.isInfoEnabled() && droppedPacketsCount % droppedPacketsCountLogInterval == 0) {
+                                        log.info("Frame dropper says to drop packet. sessionId={} stream={} count={}",
+                                                sessionId, subscriberStream.getBroadcastStreamPublishName(), droppedPacketsCount);
+                                    }
                                     return;
                                 }
                                 // increment the number of times we had pending video frames sequentially
@@ -1491,7 +1546,13 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
                                     numSequentialPendingVideoFrames = 0;
                                 }
                                 if (pendingVideos > maxPendingVideoFramesThreshold || numSequentialPendingVideoFrames > maxSequentialPendingVideoFrames) {
-                                    log.debug("Pending: {} Threshold: {} Sequential: {}", new Object[] { pendingVideos, maxPendingVideoFramesThreshold, numSequentialPendingVideoFrames });
+                                    droppedPacketsCount++;
+                                    if (log.isInfoEnabled() && droppedPacketsCount % droppedPacketsCountLogInterval == 0) {
+                                        log.info("Drop packet. Pending above threshold. sessionId={} pending={} threshold={} sequential={} stream={} count={}",
+                                                new Object[]{sessionId, pendingVideos, maxPendingVideoFramesThreshold,
+                                                        numSequentialPendingVideoFrames, subscriberStream.getBroadcastStreamPublishName(),
+                                                droppedPacketsCount});
+                                    }
                                     // drop because the client has insufficient bandwidth
                                     long now = System.currentTimeMillis();
                                     if (bufferCheckInterval > 0 && now >= nextCheckBufferUnderrun) {
@@ -1514,7 +1575,19 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
                                         bufferedInterframeIdx = 0;
                                     }
                                 }
+                            } else {
+                                if (log.isTraceEnabled()) {
+                                    log.trace("Can't drop frames. sessionId={} stream={}", sessionId, subscriberStream.getBroadcastStreamPublishName());
+                                }
                             }
+                        }  else {
+                            if (log.isTraceEnabled()) {
+                                log.trace("Stream is null. sessionId={} stream={}", sessionId, subscriberStream.getBroadcastStreamPublishName());
+                            }
+                        }
+                    } else {
+                        if (log.isTraceEnabled()) {
+                            log.trace("Not IBroadcastScope. sessionId={} stream={}", sessionId, subscriberStream.getBroadcastStreamPublishName());
                         }
                     }
                 } else if (body instanceof AudioData) {
@@ -1539,6 +1612,10 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
         } else if (message instanceof ResetMessage) {
             sendReset();
         } else {
+            if (log.isTraceEnabled()) {
+                log.trace("Bypass frame dropping. sessionId={} stream={}", sessionId, subscriberStream.getBroadcastStreamPublishName());
+            }
+
             msgOut.get().pushMessage(message);
         }
     }

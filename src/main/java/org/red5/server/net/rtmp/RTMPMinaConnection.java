@@ -249,7 +249,7 @@ public class RTMPMinaConnection extends RTMPConnection implements RTMPMinaConnec
     @Override
     public long getPendingMessages() {
         if (ioSession != null) {
-            return ioSession.getScheduledWriteMessages();
+            return ioSession.getWriteRequestQueue().size();
         }
         return 0;
     }
@@ -343,7 +343,10 @@ public class RTMPMinaConnection extends RTMPConnection implements RTMPMinaConnec
                     if (acquired) {
                         if (log.isTraceEnabled()) {
                             log.trace("Writing message");
+                            log.trace("Writing message out. sessionId={} writeRequestQueueSize={} ", getSessionId(),
+                                    ioSession.getWriteRequestQueue().size());
                         }
+
                         writingMessage(out);
                         ioSession.write(out);
                         break;

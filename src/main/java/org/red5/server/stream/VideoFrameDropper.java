@@ -28,7 +28,10 @@ import org.slf4j.LoggerFactory;
 /**
  * State machine for video frame dropping in live streams.
  * <p>
- * We start sending all frame types. Disposable interframes can be dropped any time without affecting the current state. If a regular interframe is dropped, all future frames up to the next keyframes are dropped as well. Dropped keyframes result in only keyframes being sent. If two consecutive keyframes have been successfully sent, regular interframes will be sent in the next iteration as well. If these frames all
+ * We start sending all frame types. Disposable interframes can be dropped any time without affecting the current state.
+ * If a regular interframe is dropped, all future frames up to the next keyframes are dropped as well.
+ * Dropped keyframes result in only keyframes being sent. If two consecutive keyframes have been successfully sent,
+ * regular interframes will be sent in the next iteration as well. If these frames all
  * went through, disposable interframes are sent again.
  *
  * <p>

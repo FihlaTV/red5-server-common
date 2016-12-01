@@ -129,6 +129,18 @@ public class PlaylistSubscriberStream extends AbstractClientStream implements IP
      */
     protected long bytesSent = 0;
 
+    /**
+     * threshold for number of pending video frames
+     */
+    private int maxPendingVideoFramesThreshold = 10;
+
+    /**
+     * if we have more than 1 pending video frames, but less than maxPendingVideoFrames, continue sending until there
+     * are this many sequential frames with more than 1 pending
+     */
+    private int maxSequentialPendingVideoFrames = 10;
+
+
     /** Constructs a new PlaylistSubscriberStream. */
     public PlaylistSubscriberStream() {
         defaultController = new SimplePlaylistController();
@@ -141,6 +153,8 @@ public class PlaylistSubscriberStream extends AbstractClientStream implements IP
      */
     PlayEngine createEngine(ISchedulingService schedulingService, IConsumerService consumerService, IProviderService providerService) {
         engine = new PlayEngine.Builder(this, schedulingService, consumerService, providerService).build();
+        engine.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+        engine.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
         return engine;
     }
 
@@ -168,6 +182,22 @@ public class PlaylistSubscriberStream extends AbstractClientStream implements IP
      */
     public void setUnderrunTrigger(int underrunTrigger) {
         this.underrunTrigger = underrunTrigger;
+    }
+
+    /**
+     * @param maxPendingVideoFrames
+     *            the maxPendingVideoFrames to set
+     */
+    public void setMaxPendingVideoFrames(int maxPendingVideoFrames) {
+        this.maxPendingVideoFramesThreshold = maxPendingVideoFrames;
+    }
+
+    /**
+     * @param maxSequentialPendingVideoFrames
+     *            the maxSequentialPendingVideoFrames to set
+     */
+    public void setMaxSequentialPendingVideoFrames(int maxSequentialPendingVideoFrames) {
+        this.maxSequentialPendingVideoFrames = maxSequentialPendingVideoFrames;
     }
 
     /** {@inheritDoc} */
@@ -198,6 +228,8 @@ public class PlaylistSubscriberStream extends AbstractClientStream implements IP
                     providerService = (IProviderService) scope.getParent().getContext().getBean(IProviderService.BEAN_NAME);
                 }
                 engine = new PlayEngine.Builder(this, schedulingService, consumerService, providerService).build();
+                engine.setMaxPendingVideoFrames(maxPendingVideoFramesThreshold);
+                engine.setMaxSequentialPendingVideoFrames(maxSequentialPendingVideoFrames);
             } else {
                 throw new IllegalStateException("Scope was null on start playing");
             }
