@@ -252,6 +252,15 @@ public class RTMPProtocolDecoder implements Constants, IEventDecoder {
             conn.closeChannel(channelId);
             return null;
         }
+
+        int MAX_PACKET_SIZE = 3000000; // 3MB
+        if (header.getSize() > MAX_PACKET_SIZE) {
+            // Reject packets that are too big. We do this because we ran into an OOM
+            // where packets greater than 10MB in the RTMP channel map.
+            log.warn("Packet size exceeded. size={}, max={}, connId={}", header.getSize(), MAX_PACKET_SIZE, conn.getSessionId());
+            throw new ProtocolException(String.format("Packet size exceeded. size: %s", header.getSize()));
+        }
+
         // get the size of our chunks
         int readChunkSize = rtmp.getReadChunkSize();
         // store the header based on its channel id
