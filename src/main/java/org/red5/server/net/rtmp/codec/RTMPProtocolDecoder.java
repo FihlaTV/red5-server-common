@@ -28,6 +28,7 @@ import java.util.Map;
 
 import org.apache.commons.codec.binary.Hex;
 import org.apache.mina.core.buffer.IoBuffer;
+import org.red5.io.BufferException;
 import org.red5.io.amf.AMF;
 import org.red5.io.amf.Output;
 import org.red5.io.amf3.AMF3;
@@ -79,6 +80,8 @@ import org.slf4j.LoggerFactory;
 public class RTMPProtocolDecoder implements Constants, IEventDecoder {
 
     protected static final Logger log = LoggerFactory.getLogger(RTMPProtocolDecoder.class);
+
+    private final int MAX_PACKET_SIZE = 3000000; // 3MB
 
     // close when header errors occur
     protected boolean closeOnHeaderError;
@@ -253,7 +256,6 @@ public class RTMPProtocolDecoder implements Constants, IEventDecoder {
             return null;
         }
 
-        int MAX_PACKET_SIZE = 3000000; // 3MB
         if (header.getSize() > MAX_PACKET_SIZE) {
             // Reject packets that are too big. We do this because we ran into an OOM
             // where packets greater than 10MB in the RTMP channel map.
@@ -730,38 +732,45 @@ public class RTMPProtocolDecoder implements Constants, IEventDecoder {
         } else {
             input = new org.red5.io.amf.Input(in);
         }
-        // get the action
-        String action = Deserializer.deserialize(input, String.class);
-        if (action == null) {
-            throw new RuntimeException("Action was null");
+
+        try {
+            // get the action
+            String action = Deserializer.deserialize(input, String.class);
+            if (action == null) {
+                throw new ProtocolException("Decoded action was null");
+            }
+            if (log.isTraceEnabled()) {
+                log.trace("Action: {}", action);
+            }
+
+            // instance the invoke
+            Invoke invoke = new Invoke();
+            // set the transaction id
+            invoke.setTransactionId(Deserializer.<Number> deserialize(input, Number.class).intValue());
+            // reset and decode parameters
+            input.reset();
+            // get / set the parameters if there any
+            Object[] params = in.hasRemaining() ? handleParameters(in, invoke, input) : new Object[0];
+            // determine service information
+            final int dotIndex = action.lastIndexOf('.');
+            String serviceName = (dotIndex == -1) ? null : action.substring(0, dotIndex);
+            // pull off the prefixes since java doesn't allow this on a method name
+            if (serviceName != null && (serviceName.startsWith("@") || serviceName.startsWith("|"))) {
+                serviceName = serviceName.substring(1);
+            }
+            String serviceMethod = (dotIndex == -1) ? action : action.substring(dotIndex + 1, action.length());
+            // pull off the prefixes since java doesnt allow this on a method name
+            if (serviceMethod.startsWith("@") || serviceMethod.startsWith("|")) {
+                serviceMethod = serviceMethod.substring(1);
+            }
+            // create the pending call for invoke
+            PendingCall call = new PendingCall(serviceName, serviceMethod, params);
+            invoke.setCall(call);
+            return invoke;
+        } catch (BufferException e) {
+            throw new ProtocolException(e.getMessage());
         }
-        if (log.isTraceEnabled()) {
-            log.trace("Action: {}", action);
-        }
-        // instance the invoke
-        Invoke invoke = new Invoke();
-        // set the transaction id
-        invoke.setTransactionId(Deserializer.<Number> deserialize(input, Number.class).intValue());
-        // reset and decode parameters
-        input.reset();
-        // get / set the parameters if there any
-        Object[] params = in.hasRemaining() ? handleParameters(in, invoke, input) : new Object[0];
-        // determine service information
-        final int dotIndex = action.lastIndexOf('.');
-        String serviceName = (dotIndex == -1) ? null : action.substring(0, dotIndex);
-        // pull off the prefixes since java doesn't allow this on a method name
-        if (serviceName != null && (serviceName.startsWith("@") || serviceName.startsWith("|"))) {
-            serviceName = serviceName.substring(1);
-        }
-        String serviceMethod = (dotIndex == -1) ? action : action.substring(dotIndex + 1, action.length());
-        // pull off the prefixes since java doesnt allow this on a method name
-        if (serviceMethod.startsWith("@") || serviceMethod.startsWith("|")) {
-            serviceMethod = serviceMethod.substring(1);
-        }
-        // create the pending call for invoke
-        PendingCall call = new PendingCall(serviceName, serviceMethod, params);
-        invoke.setCall(call);
-        return invoke;
+
     }
 
     /**
