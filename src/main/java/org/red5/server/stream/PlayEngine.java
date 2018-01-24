@@ -62,6 +62,7 @@ import org.red5.server.messaging.IPushableConsumer;
 import org.red5.server.messaging.InMemoryPushPushPipe;
 import org.red5.server.messaging.OOBControlMessage;
 import org.red5.server.messaging.PipeConnectionEvent;
+import org.red5.server.net.rtmp.RTMPConnection;
 import org.red5.server.net.rtmp.event.Aggregate;
 import org.red5.server.net.rtmp.event.AudioData;
 import org.red5.server.net.rtmp.event.IRTMPEvent;
@@ -1518,10 +1519,40 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
                                 // only check for frame dropping if the codec supports it
                                 long pendingVideos = pendingVideoMessages();
 
+                                
+                                try {
+                                    int subscriberOutWriteQueueSize = (((RTMPConnection) subscriberStream.getConnection()).getIoSession()).getWriteRequestQueue().size();
+//                                    log.trace("subscriberOutWriteQueueSize: {}", subscriberOutWriteQueueSize);
+                                    
+                                    if(subscriberOutWriteQueueSize > 5000) {
+                                        log.info("PANIC1! Killing connection due to subscriberOutWriteQueueSize size of {} ", subscriberOutWriteQueueSize);
+                                        try{
+                                            (((RTMPConnection) subscriberStream.getConnection())).close();
+                                        }catch (Exception e){
+                                            log.error("Error killing connection: " +e.getMessage(), e);
+                                        }
+                                    }
+                                    
+                                    
+                                    int subscriberQueueSize = (((RTMPConnection) subscriberStream.getConnection())).currentQueueSize();
+//                                    log.trace("subscriberQueueSize: {}", subscriberOutWriteQueueSize);
+                                    
+                                    if(subscriberQueueSize > 5000) {
+                                        log.info("PANIC2! Killing connection due to queue size of {} ", subscriberQueueSize);
+                                        try{
+                                            (((RTMPConnection) subscriberStream.getConnection())).close();
+                                        }catch (Exception e){
+                                            log.error("Error killing connection: " +e.getMessage(), e);
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    log.error("Error getting writeRequestQueue size: ", e);
+                                }
                                 if (log.isTraceEnabled()) {
-                                    log.trace("Pending messages. sessionId={} pending={} threshold={} sequential={} stream={}, count={}",
+                                    log.trace("Pending messages. sessionId={} pendingVideos={} maxPendingVideoFramesThreshold={} numSequentialPendingVideoFrames={} streamName={} streamId={}, count={}",
                                             new Object[] { sessionId, pendingVideos, maxPendingVideoFramesThreshold,
                                                     numSequentialPendingVideoFrames, subscriberStream.getBroadcastStreamPublishName(),
+                                                    subscriberStream.getStreamId(),
                                                     droppedPacketsCount});
                                 }
 

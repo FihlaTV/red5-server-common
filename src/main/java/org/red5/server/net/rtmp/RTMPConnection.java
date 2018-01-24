@@ -1542,7 +1542,7 @@ public abstract class RTMPConnection extends BaseConnection implements IStreamCa
      * 
      * @return current message queue size
      */
-    protected int currentQueueSize() {
+    public int currentQueueSize() {
         return currentQueueSize.get();
     }
 
