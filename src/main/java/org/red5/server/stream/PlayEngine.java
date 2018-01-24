@@ -1522,23 +1522,9 @@ public final class PlayEngine implements IFilter, IPushableConsumer, IPipeConnec
                                 
                                 try {
                                     int subscriberOutWriteQueueSize = (((RTMPConnection) subscriberStream.getConnection()).getIoSession()).getWriteRequestQueue().size();
-//                                    log.trace("subscriberOutWriteQueueSize: {}", subscriberOutWriteQueueSize);
                                     
                                     if(subscriberOutWriteQueueSize > 5000) {
                                         log.info("PANIC1! Killing connection due to subscriberOutWriteQueueSize size of {} ", subscriberOutWriteQueueSize);
-                                        try{
-                                            (((RTMPConnection) subscriberStream.getConnection())).close();
-                                        }catch (Exception e){
-                                            log.error("Error killing connection: " +e.getMessage(), e);
-                                        }
-                                    }
-                                    
-                                    
-                                    int subscriberQueueSize = (((RTMPConnection) subscriberStream.getConnection())).currentQueueSize();
-//                                    log.trace("subscriberQueueSize: {}", subscriberOutWriteQueueSize);
-                                    
-                                    if(subscriberQueueSize > 5000) {
-                                        log.info("PANIC2! Killing connection due to queue size of {} ", subscriberQueueSize);
                                         try{
                                             (((RTMPConnection) subscriberStream.getConnection())).close();
                                         }catch (Exception e){
